@@ -1,7 +1,8 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Inject, Injectable, NotFoundException, forwardRef } from '@nestjs/common';
 import { PortfolioType, RiskLevel, UserRole } from '../../constants/enums';
 import { ROLE_LIMITS } from '../../constants/permissions';
 import { CurrentUser } from '../../types/request';
+import { HoldingsService } from '../holdings/holdings.service';
 import { CreatePortfolioDto } from './dto/create-portfolio.dto';
 import { UpdatePortfolioDto } from './dto/update-portfolio.dto';
 
@@ -23,8 +24,23 @@ export class PortfoliosService {
   ];
   private nextId = 2;
 
+  constructor(
+    @Inject(forwardRef(() => HoldingsService))
+    private readonly holdingsService: HoldingsService,
+  ) {}
+
   list(user: CurrentUser) {
     return user.role === UserRole.ADMIN ? this.portfolios : this.portfolios.filter((item) => item.userId === user.id);
+  }
+
+  detail(id: number, user: CurrentUser) {
+    const portfolio = this.findOwned(id, user);
+    const holdings = this.holdingsService.listByPortfolio(id, user);
+    return {
+      ...portfolio,
+      holdings,
+      alerts: this.holdingsService.alertsByPortfolio(id, user),
+    };
   }
 
   findOwned(id: number, user: CurrentUser) {

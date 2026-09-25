@@ -24,6 +24,11 @@ export enum AssetStatus {
   DELISTED = 'DELISTED',
 }
 
+export enum AlertType {
+  STOP_LOSS = 'STOP_LOSS',
+  TAKE_PROFIT = 'TAKE_PROFIT',
+}
+
 export enum UserRole {
   USER = 'USER',
   PREMIUM = 'PREMIUM',

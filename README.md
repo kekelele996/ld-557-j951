@@ -43,7 +43,7 @@ FinanceAPI 是面向个人投资者的纯后端 API 服务，覆盖投资组合�
 | Portfolio | GET/PUT/DELETE | `/api/portfolios/:id` | 详情、编辑、删除 |
 | Portfolio | GET | `/api/portfolios/:id/performance` | 收益统计 |
 | Holding | GET/POST | `/api/portfolios/:portfolioId/holdings` | 组合持仓 |
-| Holding | GET/DELETE | `/api/holdings/:id` | 持仓详情、删除 |
+| Holding | GET/PUT/DELETE | `/api/holdings/:id` | 持仓详情、调参、删除 |
 | Transaction | GET/POST | `/api/holdings/:holdingId/transactions` | 持仓交易 |
 | Transaction | GET | `/api/portfolios/:portfolioId/transactions` | 组合交易分页 |
 | Market | GET | `/api/market/quote/:symbol` | 单资产行情 |
@@ -61,6 +61,7 @@ FinanceAPI 是面向个人投资者的纯后端 API 服务，覆盖投资组合�
 | RiskLevel | `backend/src/constants/enums.ts` | `modules/portfolios/entities/portfolio.entity.ts`、`modules/portfolios/dto/create-portfolio.dto.ts`、`modules/portfolios/portfolios.service.ts`、`database/migrations/1710000000000-init-financeapi.ts`、`database/seeds/seed.ts` |
 | TransactionType | `backend/src/constants/enums.ts` | `modules/transactions/entities/transaction.entity.ts`、`modules/transactions/dto/create-transaction.dto.ts`、`modules/transactions/transactions.service.ts`、`database/migrations/1710000000000-init-financeapi.ts`、`database/seeds/seed.ts` |
 | AssetStatus | `backend/src/constants/enums.ts` | `modules/market/entities/market-data.entity.ts`、`modules/market/market.service.ts`、`database/migrations/1710000000000-init-financeapi.ts` |
+| AlertType | `backend/src/constants/enums.ts` | `modules/holdings/holdings.service.ts`（止盈止损提醒判定）、持仓与组合详情响应字段 |
 | UserRole | `backend/src/constants/enums.ts` | `modules/auth/entities/user.entity.ts`、`modules/auth/dto/register.dto.ts`、`modules/auth/strategies/jwt.strategy.ts`、`common/guards/roles.guard.ts`、`constants/permissions.ts`、`database/seeds/seed.ts` |
 
 ## RBAC 权限矩阵
@@ -92,6 +93,36 @@ FinanceAPI 是面向个人投资者的纯后端 API 服务，覆盖投资组合�
 | `/api/market/search` | 600 秒 |
 
 当前开发实现返回 `cacheTtlSeconds` 字段用于验证策略；Docker 配置提供 Redis 服务，生产可替换 `CacheHintInterceptor` 接入真实 Redis。
+
+## 止盈止损提醒
+
+每个持仓带两个阈值参数（百分比）：
+
+- `stopLossPercent`：止损比例，创建时未填默认 **10**
+- `takeProfitPercent`：止盈比例，创建时未填默认 **8**
+
+创建后可用 `PUT /api/holdings/:id` 调整这两个参数。查询时按现价相对平均成本计算收益率：
+
+```
+returnPercent = (currentPrice - avgCost) / avgCost × 100
+```
+
+- `returnPercent <= -stopLossPercent` 时标记 `alertType: "STOP_LOSS"`
+- `returnPercent >= takeProfitPercent` 时标记 `alertType: "TAKE_PROFIT"`
+
+持仓详情（`GET /api/holdings/:id`）和持仓列表的每条记录都会返回 `returnPercent` 与 `alertType`（未触发为 `null`）。组合详情（`GET /api/portfolios/:id`）在 `holdings` 外额外返回 `alerts` 提醒列表，按超出阈值的幅度从高到低排序，每项含 `holdingId`、`symbol`、`returnPercent`、`alertType`（另有 `triggerPercent` 表示超出阈值的幅度）。数量为 0 的持仓不产生提醒；未显式设置阈值的已有持仓继续使用默认值 10%/8%。
+
+```bash
+# 建仓时指定阈值（不传则为止损 10%、止盈 8%）
+curl -X POST http://localhost:38505/api/portfolios/1/holdings \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"symbol":"AAPL","quantity":10,"avgCost":180,"stopLossPercent":7,"takeProfitPercent":12}'
+
+# 后续调整阈值
+curl -X PUT http://localhost:38505/api/holdings/1 \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"stopLossPercent":5,"takeProfitPercent":15}'
+```
 
 ## API 测试示例
 
