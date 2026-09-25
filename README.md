@@ -43,7 +43,7 @@ FinanceAPI 是面向个人投资者的纯后端 API 服务，覆盖投资组合�
 | Portfolio | GET/PUT/DELETE | `/api/portfolios/:id` | 详情、编辑、删除 |
 | Portfolio | GET | `/api/portfolios/:id/performance` | 收益统计 |
 | Holding | GET/POST | `/api/portfolios/:portfolioId/holdings` | 组合持仓 |
-| Holding | GET/DELETE | `/api/holdings/:id` | 持仓详情、删除 |
+| Holding | GET/PATCH/DELETE | `/api/holdings/:id` | 持仓详情、调阈值、删除 |
 | Transaction | GET/POST | `/api/holdings/:holdingId/transactions` | 持仓交易 |
 | Transaction | GET | `/api/portfolios/:portfolioId/transactions` | 组合交易分页 |
 | Market | GET | `/api/market/quote/:symbol` | 单资产行情 |
@@ -52,6 +52,22 @@ FinanceAPI 是面向个人投资者的纯后端 API 服务，覆盖投资组合�
 | Market | GET | `/api/market/trending` | 热门资产 |
 | Review | GET/POST | `/api/portfolios/:portfolioId/reviews` | 复盘列表、创建 |
 | Review | PUT/DELETE | `/api/reviews/:id` | 编辑、删除复盘 |
+
+## 持仓止损止盈提醒
+
+每个持仓带两个可调参数：
+
+| 字段 | 说明 | 默认值 |
+|---|---|---|
+| `stopLossPercent` | 止损比例（相对平均成本） | `0.1`（10%） |
+| `takeProfitPercent` | 止盈比例（相对平均成本） | `0.08`（8%） |
+
+- 创建持仓时未填则按止损 10%、止盈 8% 落库；历史持仓（含种子数据）继续使用默认阈值，无需补数据。
+- 查询时实时计算收益率 `returnPercent = (currentPrice - avgCost) / avgCost * 100`：`returnPercent <= -止损比例*100` 标记 `STOP_LOSS`，`>= 止盈比例*100` 标记 `TAKE_PROFIT`。
+- 持仓详情与组合持仓列表的每条记录返回 `returnPercent`、`alertType`（未触发为 `null`）。
+- 组合详情额外返回 `alerts` 提醒列表，按 `triggeredPercent`（超出阈值的幅度，= |当前收益率| − 阈值）从高到低排序，字段为 `holdingId`、`symbol`、`returnPercent`、`alertType`。
+- 数量为 0 的已清仓持仓不参与提醒。
+- 阈值可通过 `PATCH /api/holdings/:id` 随时调整（传哪个改哪个）。
 
 ## 枚举使用位置清单
 
@@ -62,6 +78,7 @@ FinanceAPI 是面向个人投资者的纯后端 API 服务，覆盖投资组合�
 | TransactionType | `backend/src/constants/enums.ts` | `modules/transactions/entities/transaction.entity.ts`、`modules/transactions/dto/create-transaction.dto.ts`、`modules/transactions/transactions.service.ts`、`database/migrations/1710000000000-init-financeapi.ts`、`database/seeds/seed.ts` |
 | AssetStatus | `backend/src/constants/enums.ts` | `modules/market/entities/market-data.entity.ts`、`modules/market/market.service.ts`、`database/migrations/1710000000000-init-financeapi.ts` |
 | UserRole | `backend/src/constants/enums.ts` | `modules/auth/entities/user.entity.ts`、`modules/auth/dto/register.dto.ts`、`modules/auth/strategies/jwt.strategy.ts`、`common/guards/roles.guard.ts`、`constants/permissions.ts`、`database/seeds/seed.ts` |
+| AlertType | `backend/src/constants/enums.ts` | `modules/holdings/holdings.service.ts`（持仓止损/止盈提醒判定） |
 
 ## RBAC 权限矩阵
 
@@ -111,6 +128,11 @@ curl -X POST http://localhost:38505/api/portfolios \
 curl -X POST http://localhost:38505/api/holdings/1/transactions \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"type":"BUY","quantity":2,"price":190,"fee":1}'
+
+# 调整持仓止损/止盈比例（0.05 = 5%）
+curl -X PATCH http://localhost:38505/api/holdings/1 \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"stopLossPercent":0.05,"takeProfitPercent":0.03}'
 
 curl -H "Authorization: Bearer $TOKEN" http://localhost:38505/api/market/quote/AAPL
 ```

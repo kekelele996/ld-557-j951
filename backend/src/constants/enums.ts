@@ -36,3 +36,8 @@ export enum AuditAction {
   DELETE = 'DELETE',
 }
 
+export enum AlertType {
+  STOP_LOSS = 'STOP_LOSS',
+  TAKE_PROFIT = 'TAKE_PROFIT',
+}
+

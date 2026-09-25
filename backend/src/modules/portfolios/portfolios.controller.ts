@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUserDecorator } from '../../common/decorators/current-user.decorator';
 import { CurrentUser } from '../../types/request';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { HoldingsService } from '../holdings/holdings.service';
 import { CreatePortfolioDto } from './dto/create-portfolio.dto';
 import { UpdatePortfolioDto } from './dto/update-portfolio.dto';
 import { PortfoliosService } from './portfolios.service';
@@ -12,7 +13,10 @@ import { PortfoliosService } from './portfolios.service';
 @UseGuards(JwtAuthGuard)
 @Controller('portfolios')
 export class PortfoliosController {
-  constructor(private readonly portfoliosService: PortfoliosService) {}
+  constructor(
+    private readonly portfoliosService: PortfoliosService,
+    private readonly holdingsService: HoldingsService,
+  ) {}
 
   @Get()
   list(@CurrentUserDecorator() user: CurrentUser) {
@@ -21,7 +25,9 @@ export class PortfoliosController {
 
   @Get(':id')
   detail(@Param('id', ParseIntPipe) id: number, @CurrentUserDecorator() user: CurrentUser) {
-    return this.portfoliosService.findOwned(id, user);
+    const portfolio = this.portfoliosService.findOwned(id, user);
+    const { holdings, alerts } = this.holdingsService.detailWithAlerts(id, user);
+    return { ...portfolio, holdings, alerts };
   }
 
   @Post()
@@ -44,4 +50,3 @@ export class PortfoliosController {
     return this.portfoliosService.performance(id, user);
   }
 }
-

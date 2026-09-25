@@ -1,9 +1,10 @@
-import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUserDecorator } from '../../common/decorators/current-user.decorator';
 import { CurrentUser } from '../../types/request';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreateHoldingDto } from './dto/create-holding.dto';
+import { UpdateHoldingDto } from './dto/update-holding.dto';
 import { HoldingsService } from './holdings.service';
 
 @ApiTags('holdings')
@@ -28,9 +29,13 @@ export class HoldingsController {
     return this.holdingsService.findOwned(id, user);
   }
 
+  @Patch('holdings/:id')
+  update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateHoldingDto, @CurrentUserDecorator() user: CurrentUser) {
+    return this.holdingsService.update(id, dto, user);
+  }
+
   @Delete('holdings/:id')
   delete(@Param('id', ParseIntPipe) id: number, @CurrentUserDecorator() user: CurrentUser) {
     return this.holdingsService.delete(id, user);
   }
 }
-

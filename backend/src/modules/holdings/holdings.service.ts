@@ -1,8 +1,13 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { AlertType } from '../../constants/enums';
 import { CurrentUser } from '../../types/request';
 import { CreateHoldingDto } from './dto/create-holding.dto';
+import { UpdateHoldingDto } from './dto/update-holding.dto';
 import { MarketService } from '../market/market.service';
 import { PortfoliosService } from '../portfolios/portfolios.service';
+
+export const DEFAULT_STOP_LOSS_PERCENT = 0.1;
+export const DEFAULT_TAKE_PROFIT_PERCENT = 0.08;
 
 export interface HoldingRecord {
   id: number;
@@ -12,12 +17,37 @@ export interface HoldingRecord {
   avgCost: number;
   currentPrice: number;
   pnl: number;
+  stopLossPercent: number;
+  takeProfitPercent: number;
+}
+
+export interface HoldingView extends HoldingRecord {
+  returnPercent: number;
+  alertType: AlertType | null;
+}
+
+export interface HoldingAlert {
+  holdingId: number;
+  symbol: string;
+  returnPercent: number;
+  alertType: AlertType;
+  triggeredPercent: number;
 }
 
 @Injectable()
 export class HoldingsService {
   private readonly holdings: HoldingRecord[] = [
-    { id: 1, portfolioId: 1, symbol: 'AAPL', quantity: 10, avgCost: 180, currentPrice: 195.2, pnl: 152 },
+    {
+      id: 1,
+      portfolioId: 1,
+      symbol: 'AAPL',
+      quantity: 10,
+      avgCost: 180,
+      currentPrice: 195.2,
+      pnl: 152,
+      stopLossPercent: DEFAULT_STOP_LOSS_PERCENT,
+      takeProfitPercent: DEFAULT_TAKE_PROFIT_PERCENT,
+    },
   ];
   private nextId = 2;
 
@@ -26,19 +56,19 @@ export class HoldingsService {
     private readonly portfoliosService: PortfoliosService,
   ) {}
 
-  listByPortfolio(portfolioId: number, user: CurrentUser) {
+  listByPortfolio(portfolioId: number, user: CurrentUser): HoldingView[] {
     this.portfoliosService.findOwned(portfolioId, user);
     return this.revalueAll(this.holdings.filter((item) => item.portfolioId === portfolioId));
   }
 
-  findOwned(id: number, user: CurrentUser) {
+  findOwned(id: number, user: CurrentUser): HoldingView {
     const holding = this.holdings.find((item) => item.id === id);
     if (!holding) throw new NotFoundException('holding not found');
     this.portfoliosService.findOwned(holding.portfolioId, user);
     return this.revalue(holding);
   }
 
-  create(portfolioId: number, dto: CreateHoldingDto, user: CurrentUser) {
+  create(portfolioId: number, dto: CreateHoldingDto, user: CurrentUser): HoldingView {
     this.portfoliosService.findOwned(portfolioId, user);
     const currentPrice = this.marketService.currentPrice(dto.symbol);
     const holding: HoldingRecord = {
@@ -49,14 +79,23 @@ export class HoldingsService {
       avgCost: dto.avgCost,
       currentPrice,
       pnl: (currentPrice - dto.avgCost) * dto.quantity,
+      stopLossPercent: dto.stopLossPercent ?? DEFAULT_STOP_LOSS_PERCENT,
+      takeProfitPercent: dto.takeProfitPercent ?? DEFAULT_TAKE_PROFIT_PERCENT,
     };
     this.holdings.push(holding);
     this.recomputePortfolioValue(portfolioId);
-    return holding;
+    return this.revalue(holding);
+  }
+
+  update(id: number, dto: UpdateHoldingDto, user: CurrentUser): HoldingView {
+    const holding = this.findRecord(id, user);
+    if (dto.stopLossPercent !== undefined) holding.stopLossPercent = dto.stopLossPercent;
+    if (dto.takeProfitPercent !== undefined) holding.takeProfitPercent = dto.takeProfitPercent;
+    return this.revalue(holding);
   }
 
   delete(id: number, user: CurrentUser) {
-    const holding = this.findOwned(id, user);
+    const holding = this.findRecord(id, user);
     const index = this.holdings.findIndex((item) => item.id === id);
     this.holdings.splice(index, 1);
     this.recomputePortfolioValue(holding.portfolioId);
@@ -64,7 +103,7 @@ export class HoldingsService {
   }
 
   applyTransaction(holdingId: number, quantity: number, price: number, type: 'BUY' | 'SELL' | 'DIVIDEND', user: CurrentUser) {
-    const holding = this.findOwned(holdingId, user);
+    const holding = this.findRecord(holdingId, user);
     if (type === 'BUY') {
       const newQuantity = holding.quantity + quantity;
       holding.avgCost = ((holding.avgCost * holding.quantity) + (price * quantity)) / newQuantity;
@@ -75,17 +114,72 @@ export class HoldingsService {
     }
     this.revalue(holding);
     this.recomputePortfolioValue(holding.portfolioId);
+    return this.toView(holding);
+  }
+
+  alertsForPortfolio(portfolioId: number, user: CurrentUser): HoldingAlert[] {
+    return this.listByPortfolio(portfolioId, user)
+      .map((item) => this.toAlert(item))
+      .filter((alert): alert is HoldingAlert => alert !== null)
+      .sort((a, b) => b.triggeredPercent - a.triggeredPercent);
+  }
+
+  detailWithAlerts(portfolioId: number, user: CurrentUser) {
+    const holdings = this.listByPortfolio(portfolioId, user);
+    return {
+      holdings,
+      alerts: holdings
+        .map((item) => this.toAlert(item))
+        .filter((alert): alert is HoldingAlert => alert !== null)
+        .sort((a, b) => b.triggeredPercent - a.triggeredPercent),
+    };
+  }
+
+  private findRecord(id: number, user: CurrentUser): HoldingRecord {
+    const holding = this.holdings.find((item) => item.id === id);
+    if (!holding) throw new NotFoundException('holding not found');
+    this.portfoliosService.findOwned(holding.portfolioId, user);
     return holding;
   }
 
-  private revalueAll(items: HoldingRecord[]) {
+  private revalueAll(items: HoldingRecord[]): HoldingView[] {
     return items.map((item) => this.revalue(item));
   }
 
-  private revalue(holding: HoldingRecord) {
+  private revalue(holding: HoldingRecord): HoldingView {
     holding.currentPrice = this.marketService.currentPrice(holding.symbol);
     holding.pnl = Number(((holding.currentPrice - holding.avgCost) * holding.quantity).toFixed(2));
-    return holding;
+    return this.toView(holding);
+  }
+
+  private toView(holding: HoldingRecord): HoldingView {
+    const returnPercent = holding.avgCost === 0
+      ? 0
+      : Number((((holding.currentPrice - holding.avgCost) / holding.avgCost) * 100).toFixed(4));
+    return { ...holding, returnPercent, alertType: this.resolveAlert(holding, returnPercent) };
+  }
+
+  private resolveAlert(holding: HoldingRecord, returnPercent: number): AlertType | null {
+    if (holding.quantity <= 0) return null;
+    const stopLossThreshold = -Number((holding.stopLossPercent * 100).toFixed(4));
+    const takeProfitThreshold = Number((holding.takeProfitPercent * 100).toFixed(4));
+    if (returnPercent <= stopLossThreshold) return AlertType.STOP_LOSS;
+    if (returnPercent >= takeProfitThreshold) return AlertType.TAKE_PROFIT;
+    return null;
+  }
+
+  private toAlert(holding: HoldingView): HoldingAlert | null {
+    if (holding.alertType === null) return null;
+    const thresholdPercent = holding.alertType === AlertType.STOP_LOSS
+      ? holding.stopLossPercent * 100
+      : holding.takeProfitPercent * 100;
+    return {
+      holdingId: holding.id,
+      symbol: holding.symbol,
+      returnPercent: holding.returnPercent,
+      alertType: holding.alertType,
+      triggeredPercent: Number((Math.abs(holding.returnPercent) - thresholdPercent).toFixed(4)),
+    };
   }
 
   private recomputePortfolioValue(portfolioId: number) {
@@ -94,4 +188,3 @@ export class HoldingsService {
     this.portfoliosService.setTotalValue(portfolioId, total);
   }
 }
-
